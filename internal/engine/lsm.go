@@ -480,6 +480,19 @@ func (l *LSM) RangeScan(start, end string) ([]struct {
 func (l *LSM) Close() error {
     l.mu.Lock()
     defer l.mu.Unlock()
+    
+    // Flush current MemTable if it has data
+    if l.mem.Size() > 0 {
+		// We can reuse rotateMemTable logic but we need to be careful not to trigger async compaction 
+		// if we are shutting down. But rotateMemTable triggers it in goroutine.
+		// That might be fine, the process will exit and kill the goroutine.
+		// Or we can just call the flush logic directly.
+		// Let's call rotateMemTable for consistency.
+		if err := l.rotateMemTable(); err != nil {
+			return err
+		}
+    }
+    
     for _, sst := range l.ssTables {
         sst.Close()
     }
