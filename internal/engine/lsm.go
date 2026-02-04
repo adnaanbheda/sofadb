@@ -266,7 +266,8 @@ func (l *LSM) rotateMemTable(skipCompaction bool) error {
 	// In a real system, we'd add to l.immutable and flush async.
 	// Here we flush sync to keep it simple and safe.
 
-	filename := fmt.Sprintf("%d.sst", time.Now().UnixNano())
+	suffix := time.Now().UnixNano() % 1000
+	filename := fmt.Sprintf("%d_%d.sst", time.Now().UnixNano(), suffix)
 	path := filepath.Join(l.dataDir, filename)
 
 	if err := WriteSSTable(oldMem, path); err != nil {
@@ -326,7 +327,8 @@ func (l *LSM) Compact() error {
 	mergedIter := NewMergedIterator(iterators)
 
 	// 2. Stream to new SSTable
-	filename := fmt.Sprintf("%d.sst", time.Now().UnixNano())
+	suffix := time.Now().UnixNano() % 1000
+	filename := fmt.Sprintf("%d_%d.sst", time.Now().UnixNano(), suffix)
 	path := filepath.Join(l.dataDir, filename)
 
 	builder, err := NewSSTableBuilder(path)
@@ -541,13 +543,17 @@ func (l *LSM) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// Flush current MemTable if it has data
-	if l.mem.Size() > 0 {
-		// We can reuse rotateMemTable logic but we need to be careful not to trigger async compaction
-		// if we are shutting down. But rotateMemTable triggers it in goroutine.
-		// That might be fine, the process will exit and kill the goroutine.
-		// Or we can just call the flush logic directly.
-		// Let's call rotateMemTable for consistency.
+	// Sync WAL to ensure durability before flushing
+	if l.walFile != nil {
+		if err := l.walFile.Sync(); err != nil {
+			return err
+		}
+	}
+
+	// Flush current MemTable if it has any entries
+	// Use len check instead of Size() to catch even small entries
+	memEntries, _ := l.mem.All()
+	if len(memEntries) > 0 {
 		if err := l.rotateMemTable(true); err != nil {
 			return err
 		}

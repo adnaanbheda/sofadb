@@ -94,6 +94,12 @@ func (b *SSTableBuilder) Close() error {
 		return err
 	}
 
+	// Sync to ensure all data is written to disk before closing
+	// This is critical for durability, especially when process exits quickly
+	if err := b.file.Sync(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -196,6 +202,12 @@ func (t *SSTable) Get(key string) ([]byte, bool, error) {
 	}
 
 	for {
+		// Boundary check: don't read into index/footer
+		currPos, _ := t.file.Seek(0, io.SeekCurrent)
+		if currPos >= t.DataEndOffset {
+			return nil, false, nil
+		}
+
 		var kLen int32
 		err := binary.Read(t.file, binary.LittleEndian, &kLen)
 		if err == io.EOF {
@@ -268,6 +280,12 @@ func (t *SSTable) Scan(start, end string) ([]struct {
 
 	// 3. Iterate
 	for {
+		// Boundary check: don't read into index/footer
+		currPos, _ := t.file.Seek(0, io.SeekCurrent)
+		if currPos >= t.DataEndOffset {
+			break
+		}
+
 		var kLen int32
 		err := binary.Read(t.file, binary.LittleEndian, &kLen)
 		if err == io.EOF {
@@ -335,6 +353,12 @@ func (t *SSTable) ScanKeys(start, end string) ([]string, error) {
 
 	// 3. Iterate
 	for {
+		// Boundary check: don't read into index/footer
+		currPos, _ := t.file.Seek(0, io.SeekCurrent)
+		if currPos >= t.DataEndOffset {
+			break
+		}
+
 		var kLen int32
 		err := binary.Read(t.file, binary.LittleEndian, &kLen)
 		if err == io.EOF {
