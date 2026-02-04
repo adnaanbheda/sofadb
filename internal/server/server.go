@@ -63,6 +63,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/docs", s.handleDocs)
 	mux.HandleFunc("/docs/", s.handleDoc)
+	mux.HandleFunc("/range", s.handleRange)
 }
 
 // loggingMiddleware logs incoming requests.
@@ -210,5 +211,50 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key string
 	json.NewEncoder(w).Encode(map[string]string{
 		"status": "deleted",
 		"key":    key,
+	})
+}
+
+// handleRange handles requests to /range?start=foo&end=bar.
+func (s *Server) handleRange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	start := r.URL.Query().Get("start")
+	end := r.URL.Query().Get("end")
+
+	if start == "" {
+		http.Error(w, "Start key is required", http.StatusBadRequest)
+		return
+	}
+	if end == "" {
+		http.Error(w, "End key is required", http.StatusBadRequest)
+		return
+	}
+
+	results, err := s.engine.ReadKeyRange(start, end)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Transform for JSON
+	type rangePair struct {
+		Key   string `json:"key"`
+		Value string `json:"value"` // Assuming string values for JSON simplicity, or use []byte/base64
+	}
+	var jsonResults []rangePair
+	for _, res := range results {
+		jsonResults = append(jsonResults, rangePair{
+			Key:   res.Key,
+			Value: string(res.Value),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"results": jsonResults,
+		"count":   len(jsonResults),
 	})
 }
