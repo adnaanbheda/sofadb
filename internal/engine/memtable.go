@@ -84,8 +84,8 @@ func (m *MemTable) Put(key string, value []byte) {
 	m.len++
 }
 
-// Get retrieves a value by key.
-func (m *MemTable) Get(key string) ([]byte, bool) {
+// Read retrieves a value by key.
+func (m *MemTable) Read(key string) ([]byte, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 

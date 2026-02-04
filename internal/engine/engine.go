@@ -36,8 +36,8 @@ func New(dataDir string) (*Engine, error) {
 	}, nil
 }
 
-// Get retrieves a document by key.
-func (e *Engine) Get(key string) ([]byte, error) {
+// Read retrieves a document by key.
+func (e *Engine) Read(key string) ([]byte, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -45,7 +45,7 @@ func (e *Engine) Get(key string) ([]byte, error) {
 		return nil, ErrEngineShutdown
 	}
 
-	return e.lsm.Get(key)
+	return e.lsm.Read(key)
 }
 
 // Put stores a document with the given key.
@@ -85,8 +85,8 @@ func (e *Engine) Keys() ([]string, error) {
 	return e.lsm.Keys()
 }
 
-// RangeScan returns all keys in the range [start, end).
-func (e *Engine) RangeScan(start, end string) ([]struct {
+// ReadKeyRange returns all keys in the range [start, end).
+func (e *Engine) ReadKeyRange(start, end string) ([]struct {
 	Key   string
 	Value []byte
 }, error) {
@@ -97,7 +97,7 @@ func (e *Engine) RangeScan(start, end string) ([]struct {
 		return nil, ErrEngineShutdown
 	}
 
-	return e.lsm.RangeScan(start, end)
+	return e.lsm.ReadKeyRange(start, end)
 }
 
 // Count returns the number of documents in the store.

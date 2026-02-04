@@ -149,7 +149,7 @@ func (s *Server) handleDoc(w http.ResponseWriter, r *http.Request) {
 
 // handleGet retrieves a document by key.
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, key string) {
-	value, err := s.engine.Get(key)
+	value, err := s.engine.Read(key)
 	if err != nil {
 		if err == engine.ErrKeyNotFound {
 			http.Error(w, "Document not found", http.StatusNotFound)

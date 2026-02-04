@@ -209,13 +209,13 @@ func (l *LSM) Put(key string, value []byte) error {
 	return nil
 }
 
-// Get reads from MemTable, then Immutable MemTables, then SSTables.
-func (l *LSM) Get(key string) ([]byte, error) {
+// Read reads from MemTable, then Immutable MemTables, then SSTables.
+func (l *LSM) Read(key string) ([]byte, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
 	// 1. Check active MemTable
-	if val, found := l.mem.Get(key); found {
+	if val, found := l.mem.Read(key); found {
 		if val == nil {
 			return nil, ErrKeyNotFound
 		}
@@ -224,7 +224,7 @@ func (l *LSM) Get(key string) ([]byte, error) {
 
 	// 2. Check immutable memtables
 	for i := len(l.immutable) - 1; i >= 0; i-- {
-		if val, found := l.immutable[i].Get(key); found {
+		if val, found := l.immutable[i].Read(key); found {
 			if val == nil {
 				return nil, ErrKeyNotFound
 			}
@@ -234,7 +234,7 @@ func (l *LSM) Get(key string) ([]byte, error) {
 
 	// 3. Check SSTables (Newest to Oldest)
 	for _, sst := range l.ssTables {
-		val, found, err := sst.Get(key)
+		val, found, err := sst.Read(key)
 		if err != nil {
 			return nil, err
 		}
@@ -450,7 +450,7 @@ func (m *MergedIterator) Value() []byte { return m.currV }
 func (m *MergedIterator) Error() error  { return m.err }
 
 // Keys returns all unique keys in the LSM tree without loading values.
-// This is more efficient than RangeScan when only counting or listing keys.
+// This is more efficient than ReadKeyRange when only counting or listing keys.
 func (l *LSM) Keys() ([]string, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -485,58 +485,60 @@ func (l *LSM) Keys() ([]string, error) {
 	return result, nil
 }
 
-// RangeScan returns values for keys in [start, end).
-func (l *LSM) RangeScan(start, end string) ([]struct {
+// ReadKeyRange returns values for keys in [start, end).
+func (l *LSM) ReadKeyRange(start, end string) ([]struct {
 	Key   string
 	Value []byte
 }, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	// data map to handle LWW (Last Write Wins)
-	data := make(map[string][]byte)
+	// 1. Get all iterators
+	var iterators []Iterator
 
-	// 1. Scan SSTables (Oldest to Newest)
-	for i := len(l.ssTables) - 1; i >= 0; i-- {
-		sst := l.ssTables[i]
-		rows, err := sst.Scan(start, end)
+	// Active MemTable
+	memEntries, _ := l.mem.All() // Simplified for now - should have proper MemIterator
+	iterators = append(iterators, &memIterator{entries: memEntries})
+
+	// Immutable MemTables
+	for i := len(l.immutable) - 1; i >= 0; i-- {
+		entries, _ := l.immutable[i].All()
+		iterators = append(iterators, &memIterator{entries: entries})
+	}
+
+	// SSTables
+	for _, sst := range l.ssTables {
+		it, err := sst.NewIterator()
 		if err != nil {
 			return nil, err
 		}
-		for _, row := range rows {
-			data[row.Key] = row.Value
-		}
+		iterators = append(iterators, it)
 	}
 
-	// 2. Scan MemTable
-	memEntries, _ := l.mem.All()
-	for _, entry := range memEntries {
-		if entry.Key >= start && entry.Key < end {
-			data[entry.Key] = entry.Value
-		}
-	}
-
-	// 3. Convert map to sorted slice AND filter tombstones
-	var sortedKeys []string
-	for k, v := range data {
-		if v != nil { // Only add if not a tombstone
-			sortedKeys = append(sortedKeys, k)
-		}
-	}
-	sort.Strings(sortedKeys)
-
-	var result []struct {
+	merged := NewMergedIterator(iterators)
+	var results []struct {
 		Key   string
 		Value []byte
 	}
-	for _, k := range sortedKeys {
-		result = append(result, struct {
+
+	for merged.Next() {
+		k := merged.Key()
+		if k < start {
+			continue
+		}
+		if k >= end {
+			break
+		}
+		// Filter tombstones
+		if merged.Value() != nil {
+			results = append(results, struct {
 			Key   string
 			Value []byte
-		}{k, data[k]})
+			}{k, merged.Value()})
+		}
 	}
 
-	return result, nil
+	return results, nil
 }
 
 func (l *LSM) Close() error {

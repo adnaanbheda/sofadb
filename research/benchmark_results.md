@@ -1,4 +1,4 @@
-# Benchmark Results: SofaDB vs MongoDB vs Redis
+# Preliminary Benchmark Results: SofaDB vs MongoDB vs Redis
 
 ## Environment
 *   **Concurrency**: 20 Clients
@@ -16,6 +16,9 @@
 |  | Read | 14.99s | **666** | ~0.05x |
 | **SofaDB (TCP)** | Write | 0.86s | **11,598** | **~0.88x** |
 |  | Read | 0.87s | **11,540** | **~0.86x** |
+
+> [!NOTE]
+> These are **preliminary benchmark results**. A full benchmarking process with varied payloads, durations, and system states is required for a comprehensive performance assessment.
 
 ## Analysis
 

@@ -183,8 +183,8 @@ func OpenSSTable(path string) (*SSTable, error) {
 	}, nil
 }
 
-// Get searches for a key in the SSTable.
-func (t *SSTable) Get(key string) ([]byte, bool, error) {
+// Read searches for a key in the SSTable.
+func (t *SSTable) Read(key string) ([]byte, bool, error) {
 	// 1. Check index to find start offset
 	// Find the largest key in index <= key
 	startOffset := int64(0)
@@ -250,8 +250,8 @@ func (t *SSTable) Get(key string) ([]byte, bool, error) {
 	}
 }
 
-// Scan returns all key-value pairs in the range [start, end).
-func (t *SSTable) Scan(start, end string) ([]struct {
+// ReadKeyRange returns all key-value pairs in the range [start, end).
+func (t *SSTable) ReadKeyRange(start, end string) ([]struct {
 	Key   string
 	Value []byte
 }, error) {

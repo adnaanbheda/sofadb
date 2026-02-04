@@ -141,7 +141,7 @@ func TestChaos_WAL_PartialWrite(t *testing.T) {
 	recovered := 0
 	for i := 0; i < 10; i++ {
 		key := fmt.Sprintf("key-%d", i)
-		_, err := lsm.Get(key)
+		_, err := lsm.Read(key)
 		if err == nil {
 			recovered++
 		}

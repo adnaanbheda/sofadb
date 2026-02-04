@@ -168,9 +168,9 @@ func benchSofaDBTCP() {
 		defer func() { pool <- conn }()
 
 		key := fmt.Sprintf("k%d", rand.Intn(*numRequests))
-		
+
 		buf := new(bytes.Buffer)
-		buf.WriteByte(0x02) // Get
+		buf.WriteByte(0x02) // Read
 		binary.Write(buf, binary.LittleEndian, int16(len(key)))
 		buf.WriteString(key)
 
@@ -188,8 +188,10 @@ func benchSofaDBTCP() {
 		if vLen > 0 {
 			io.CopyN(io.Discard, conn, int64(vLen))
 		}
-		
-		if statusBuf[0] == 0x02 { return nil } // NotFound is 0x02
+
+		if statusBuf[0] == 0x02 {
+			return nil
+		} // NotFound is 0x02
 		if statusBuf[0] != 0 {
 			return fmt.Errorf("status %d", statusBuf[0])
 		}
