@@ -10,6 +10,6 @@ RUN go build -o sofadb ./cmd/sofadb
 FROM alpine:latest
 WORKDIR /app
 COPY --from=builder /app/sofadb .
-EXPOSE 8080
-EXPOSE 8081
-CMD ["./sofadb", "-port", "8080", "-data-dir", "/data"]
+EXPOSE 9090
+EXPOSE 9091
+CMD ["./sofadb", "-port", "9090", "-tcp-port", "9091", "-data-dir", "/data"]
