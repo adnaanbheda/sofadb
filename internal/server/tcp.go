@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"time"
 	"sofadb/internal/engine"
 )
 
@@ -20,8 +21,9 @@ const (
 )
 
 type TCPServer struct {
-	addr   string
-	engine *engine.Engine
+	addr     string
+	engine   *engine.Engine
+	listener net.Listener
 }
 
 func NewTCPServer(addr string, engine *engine.Engine) *TCPServer {
@@ -36,13 +38,20 @@ func (s *TCPServer) Start() error {
 	if err != nil {
 		return err
 	}
+	s.listener = ln
 	log.Printf("TCP Server listening on %s", s.addr)
 
 	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			log.Printf("Accept error: %v", err)
-			continue
+		conn, sErr := ln.Accept()
+		if sErr != nil {
+			// Check if closed
+			select {
+			case <-time.After(1 * time.Millisecond):
+				// Just a check, could use errors.Is(err, net.ErrClosed) but it's simpler to just log and return if we expect close.
+				// However, standard accept loop pattern:
+				log.Printf("Accept error (stopping?): %v", sErr)
+				return sErr
+			}
 		}
 		go s.handleConn(conn)
 	}
@@ -138,4 +147,12 @@ func (s *TCPServer) writeResponse(w io.Writer, err error, val []byte) {
 		// Write 0 length for error/notfound
 		binary.Write(w, binary.LittleEndian, int32(0))
 	}
+}
+
+// Close stops the TCP server.
+func (s *TCPServer) Close() error {
+	if s.listener != nil {
+		return s.listener.Close()
+	}
+	return nil
 }

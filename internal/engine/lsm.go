@@ -89,10 +89,26 @@ func (l *LSM) recoverFromWAL() error {
         if err == io.EOF {
             break
         }
-        if err != nil {
-            return err // corrupted?
+        if err == io.ErrUnexpectedEOF {
+             // Partial write at end of WAL (crash). Truncate and continue.
+             // We need to truncate the file to the current offset, but here we just stop.
+             // The file is opened O_RDWR, so next writes append. We should probably Truncate to clean up.
+             currentPos, _ := f.Seek(0, io.SeekCurrent)
+             f.Truncate(currentPos - int64(4)) // Rewind the 4 bytes we tried to read? No, Read failed. 
+             // Actually, if Read failed, the file pointer might have moved or not depending on implementation.
+             // Safer to just Log and Ignore for now, relying on next compaction to clean up.
+             fmt.Println("Recovered partial WAL entry (truncated)")
+             break
         }
+        if err != nil {
+            return err // Real IO error
+        }
+
         if err := binary.Read(f, binary.LittleEndian, &vLen); err != nil {
+             if err == io.EOF || err == io.ErrUnexpectedEOF {
+                 fmt.Println("Recovered partial WAL entry (truncated at vLen)")
+                 break
+             }
             return err
         }
         

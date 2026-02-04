@@ -72,6 +72,11 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// Stop TCP first to stop new writes
+	if err := tcpSrv.Close(); err != nil {
+		log.Printf("TCP Shutdown error: %v", err)
+	}
+
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatalf("Shutdown error: %v", err)
 	}
