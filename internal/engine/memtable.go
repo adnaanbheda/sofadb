@@ -19,12 +19,12 @@ type node struct {
 
 // MemTable is an in-memory key-value store using a Skip List.
 type MemTable struct {
-	mu       sync.RWMutex
-	head     *node
-	height   int
-	size     int64 // Approximate size in bytes
-	len      int   // Number of entries
-	rnd      *rand.Rand
+	mu     sync.RWMutex
+	head   *node
+	height int
+	size   int64 // Approximate size in bytes
+	len    int   // Number of entries
+	rnd    *rand.Rand
 }
 
 // NewMemTable creates a new MemTable.
@@ -106,19 +106,19 @@ func (m *MemTable) Get(key string) ([]byte, bool) {
 
 // Delete removes a key. In LSM, this usually means inserting a tombstone, but for the MemTable structure itself we can delete.
 // However, to support standard LSM semantics, we should probably support tombstones.
-// For now, let's just delete from the structure to keep it simple, 
+// For now, let's just delete from the structure to keep it simple,
 // OR simpler: Put(key, nil) represents a delete/tombstone.
 // Let's assume the caller handles using a specific tombstone byte sequence or nil.
 // If we delete directly from skip list, we save memory.
 func (m *MemTable) Delete(key string) {
-    // For a pure MemTable, we can just remove.
-    // But in full LSM, we might need to track this delete to flush it to SSTable.
-    // If we just delete from MemTable, we lose the "delete" instruction for older SSTables.
-    // So we MUST insert a tombstone record.
-    // We will treat nil value as tombstone in Put.
-    // This allows Delete to just be a wrapper around Put.
-    // But wait, if we delete a key that is NOT in MemTable but IS in SSTable, we MUST add a record.
-    // So Delete == Put(key, tombstone).
+	// For a pure MemTable, we can just remove.
+	// But in full LSM, we might need to track this delete to flush it to SSTable.
+	// If we just delete from MemTable, we lose the "delete" instruction for older SSTables.
+	// So we MUST insert a tombstone record.
+	// We will treat nil value as tombstone in Put.
+	// This allows Delete to just be a wrapper around Put.
+	// But wait, if we delete a key that is NOT in MemTable but IS in SSTable, we MUST add a record.
+	// So Delete == Put(key, tombstone).
 }
 
 // randomLevel generates a random level for a new skip list node.
@@ -161,4 +161,18 @@ func (m *MemTable) All() ([]struct {
 		current = current.next[0]
 	}
 	return result, nil
+}
+
+// Keys returns all keys in the MemTable.
+func (m *MemTable) Keys() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var keys []string
+	current := m.head.next[0]
+	for current != nil {
+		keys = append(keys, current.key)
+		current = current.next[0]
+	}
+	return keys
 }

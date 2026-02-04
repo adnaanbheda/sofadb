@@ -73,7 +73,7 @@ func (e *Engine) Delete(key string) error {
 }
 
 // Keys returns all keys in the store.
-// Note: This scans the entire database and can be slow.
+// This is optimized to not load values into memory.
 func (e *Engine) Keys() ([]string, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -82,21 +82,14 @@ func (e *Engine) Keys() ([]string, error) {
 		return nil, ErrEngineShutdown
 	}
 
-	// Scan everything
-	kvs, err := e.lsm.RangeScan("", "\xFF") // \xFF is effectively infinity for strings
-	if err != nil {
-		return nil, err
-	}
-
-	keys := make([]string, len(kvs))
-	for i, kv := range kvs {
-		keys[i] = kv.Key
-	}
-	return keys, nil
+	return e.lsm.Keys()
 }
 
 // RangeScan returns all keys in the range [start, end).
-func (e *Engine) RangeScan(start, end string) ([]struct{Key string; Value []byte}, error) {
+func (e *Engine) RangeScan(start, end string) ([]struct {
+	Key   string
+	Value []byte
+}, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
