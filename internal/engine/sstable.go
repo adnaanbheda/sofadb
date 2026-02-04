@@ -371,6 +371,11 @@ func (it *SSTableIterator) Next() bool {
 		return false
 	}
 	
+	if vLen < 0 || vLen > 16*1024*1024 { // 16MB limit for safety
+		it.err = fmt.Errorf("invalid value len: %d", vLen)
+		return false
+	}
+	
 	valBuf := make([]byte, vLen)
 	if _, err := io.ReadFull(it.file, valBuf); err != nil {
 		it.err = err
