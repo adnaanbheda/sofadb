@@ -9,8 +9,9 @@ import (
 
 // SSTable represents an immutable sorted string table on disk.
 type SSTable struct {
-	file  *os.File
-	index []IndexEntry
+	file          *os.File
+	index         []IndexEntry
+	DataEndOffset int64
 }
 
 type IndexEntry struct {
@@ -18,70 +19,101 @@ type IndexEntry struct {
 	Offset int64
 }
 
-// WriteSSTable writes a MemTable to disk as an SSTable.
-func WriteSSTable(mem *MemTable, path string) error {
+// SSTableBuilder allows incremental construction of an SSTable.
+type SSTableBuilder struct {
+	file        *os.File
+	index       []IndexEntry
+	offset      int64
+	entryCount  int
+}
+
+// NewSSTableBuilder creates a new builder.
+func NewSSTableBuilder(path string) (*SSTableBuilder, error) {
 	f, err := os.Create(path)
 	if err != nil {
+		return nil, err
+	}
+	return &SSTableBuilder{
+		file: f,
+	}, nil
+}
+
+// Add appends a key-value pair to the SSTable.
+// Keys must be added in sorted order.
+func (b *SSTableBuilder) Add(key string, value []byte) error {
+	// Add to index (sparse)
+	if b.entryCount%100 == 0 {
+		b.index = append(b.index, IndexEntry{Key: key, Offset: b.offset})
+	}
+
+	// Write KeyLen (4), Key, ValueLen (4), Value
+	kLen := int32(len(key))
+	vLen := int32(len(value))
+
+	if err := binary.Write(b.file, binary.LittleEndian, kLen); err != nil {
 		return err
 	}
-	defer f.Close()
-
-	// Get all entries sorted
-	entries, _ := mem.All() // MemTable.All returns sorted entries from skip list
-
-	var index []IndexEntry
-	offset := int64(0)
-
-	// Write data
-	for i, entry := range entries {
-		// Add to index every 100 entries (sparse index) or if it's the first
-		if i%100 == 0 {
-			index = append(index, IndexEntry{Key: entry.Key, Offset: offset})
-		}
-
-		// Write KeyLen (4), Key, ValueLen (4), Value
-		kLen := int32(len(entry.Key))
-		vLen := int32(len(entry.Value))
-
-		if err := binary.Write(f, binary.LittleEndian, kLen); err != nil {
-			return err
-		}
-		if _, err := f.WriteString(entry.Key); err != nil {
-			return err
-		}
-		if err := binary.Write(f, binary.LittleEndian, vLen); err != nil {
-			return err
-		}
-		if _, err := f.Write(entry.Value); err != nil {
-			return err
-		}
-
-		offset += 4 + int64(kLen) + 4 + int64(vLen)
+	if _, err := b.file.WriteString(key); err != nil {
+		return err
+	}
+	if err := binary.Write(b.file, binary.LittleEndian, vLen); err != nil {
+		return err
+	}
+	if _, err := b.file.Write(value); err != nil {
+		return err
 	}
 
+	b.offset += 4 + int64(kLen) + 4 + int64(vLen)
+	b.entryCount++
+	return nil
+}
+
+// Close finishes the SSTable (writes index and footer) and closes the file.
+func (b *SSTableBuilder) Close() error {
+	defer b.file.Close()
+
 	// Write Index offset
-	indexOffset := offset
+	indexOffset := b.offset
 
 	// Write Index
-	for _, idx := range index {
+	for _, idx := range b.index {
 		kLen := int32(len(idx.Key))
-		if err := binary.Write(f, binary.LittleEndian, kLen); err != nil {
+		if err := binary.Write(b.file, binary.LittleEndian, kLen); err != nil {
 			return err
 		}
-		if _, err := f.WriteString(idx.Key); err != nil {
+		if _, err := b.file.WriteString(idx.Key); err != nil {
 			return err
 		}
-		if err := binary.Write(f, binary.LittleEndian, idx.Offset); err != nil {
+		if err := binary.Write(b.file, binary.LittleEndian, idx.Offset); err != nil {
 			return err
 		}
 	}
 
 	// Write Footer: IndexOffset (8 bytes)
-	if err := binary.Write(f, binary.LittleEndian, indexOffset); err != nil {
+	if err := binary.Write(b.file, binary.LittleEndian, indexOffset); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// WriteSSTable writes a MemTable to disk as an SSTable.
+func WriteSSTable(mem *MemTable, path string) error {
+	builder, err := NewSSTableBuilder(path)
+	if err != nil {
+		return err
+	}
+
+	// Get all entries sorted
+	entries, _ := mem.All() 
+	for _, entry := range entries {
+		if err := builder.Add(entry.Key, entry.Value); err != nil {
+			builder.file.Close() // Force close on error
+			return err
+		}
+	}
+
+	return builder.Close()
 }
 
 // OpenSSTable opens an existing SSTable.
@@ -139,8 +171,9 @@ func OpenSSTable(path string) (*SSTable, error) {
 	}
 
 	return &SSTable{
-		file:  f,
-		index: index,
+		file:          f,
+		index:         index,
+		DataEndOffset: indexOffset,
 	}, nil
 }
 
@@ -278,6 +311,106 @@ func (t *SSTable) Scan(start, end string) ([]struct {
 	}
 
 	return results, nil
+}
+
+// SSTableIterator iterates over an SSTable.
+type SSTableIterator struct {
+	file   *os.File
+	limit  int64 // Offset where data ends (start of index)
+	offset int64
+	k      string
+	v      []byte
+	err    error
+	valid  bool
+}
+
+// NewIterator creates an iterator starting at the beginning of the data.
+func (t *SSTable) NewIterator() (*SSTableIterator, error) {
+	if _, err := t.file.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return &SSTableIterator{
+		file:  t.file,
+		limit: t.DataEndOffset,
+	}, nil
+}
+
+func (it *SSTableIterator) Next() bool {
+	it.valid = false // Assume invalid until success
+	if it.offset >= it.limit {
+		return false
+	}
+
+	var kLen int32
+	err := binary.Read(it.file, binary.LittleEndian, &kLen)
+	if err == io.EOF {
+		return false
+	}
+    if err != nil {
+        it.err = err
+        return false
+    }
+    
+    // Sanity check
+    if kLen < 0 || kLen > 1024*1024 {
+         // Could be index start
+         it.err = fmt.Errorf("invalid key len: %d (end of data?)", kLen) 
+         return false
+    }
+
+	keyBuf := make([]byte, kLen)
+	if _, err := io.ReadFull(it.file, keyBuf); err != nil {
+		it.err = err
+		return false
+	}
+	it.k = string(keyBuf)
+
+	var vLen int32
+	if err := binary.Read(it.file, binary.LittleEndian, &vLen); err != nil {
+		it.err = err
+		return false
+	}
+	
+	valBuf := make([]byte, vLen)
+	if _, err := io.ReadFull(it.file, valBuf); err != nil {
+		it.err = err
+		return false
+	}
+	it.v = valBuf
+
+	// Update offset: 4(klen) + klen + 4(vlen) + vlen
+	it.offset += 4 + int64(kLen) + 4 + int64(vLen)
+	it.valid = true
+	return true
+}
+
+func (it *SSTableIterator) Valid() bool {
+	return it.valid
+}
+
+func (it *SSTableIterator) Key() string {
+    return it.k
+}
+
+func (it *SSTableIterator) Value() []byte {
+    return it.v
+}
+
+func (it *SSTableIterator) Error() error {
+    if it.err == io.EOF {
+        return nil
+    }
+    // We treat "invalid key len" as EOF if we hit index block?
+    // Actually, index block starts immediately after data.
+    // The index block structure is: KLen (4), Key, Offset (8).
+    // Data block structure is: KLen (4), Key, VLen (4), Value.
+    // They look similar! We need to detect when we hit index.
+    // SSTable has a Footer at end saying where Index starts.
+    // So `NewIterator` should take a limit?
+    // Or `SSTable` struct knows `indexOffset`?
+    // Wait, `SSTable` struct has `index` slice but not `indexOffset` stored.
+    // But `OpenSSTable` calculates it. We should store it.
+    return it.err
 }
 
 func (t *SSTable) Close() error {

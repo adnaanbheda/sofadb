@@ -19,7 +19,7 @@ We have implemented a functional Log-Structured Merge (LSM) Tree storage engine 
 **Status: Functional Prototype / "Toy" DB**
 
 The current implementation is **correct** in terms of data storage and retrieval semantics. It persists data and handles range scans. However, it is **not yet robust** enough for high-scale production usage due to:
-1.  **Performance Cliffs**: The "Merge All" compaction will stall the system as data grows.
+1.  **Performance Cliffs (Disk I/O)**: The "Merge All" strategy causes massive **Write Amplification**. Compacting 1GB of data requires reading and re-writing the entire 1GB, even if only 1KB changed. This saturates **Disk I/O** bandwidth, causing latency spikes for concurrent writes to the WAL. (Note: RAM is no longer a bottleneck due to Streaming Compaction).
 2.  **Read Amplification**: Without Bloom Filters, checking non-existent keys is slow.
 3.  **Concurrency Bottlenecks**: Global lock limits throughput on multi-core concurrent workloads.
 

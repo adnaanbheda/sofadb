@@ -16,9 +16,17 @@ import (
 const (
     // Flush threshold for MemTable (e.g., 4MB)
     MemTableSizeLimit = 4 * 1024 * 1024 
-    // Compaction threshold: if more than 5 SSTables, compact them
-    CompactionThreshold = 5
+	// Compaction threshold: if more than 5 SSTables, compact them
+	CompactionThreshold = 5
 )
+
+type Iterator interface {
+	Next() bool
+	Valid() bool
+	Key() string
+	Value() []byte
+	Error() error
+}
 
 // LSM handles the orchestration of MemTable and SSTables.
 type LSM struct {
@@ -270,111 +278,150 @@ func (l *LSM) rotateMemTable() error {
     return nil
 }
 
-// Compact merges all SSTables into one.
-// Simplified "Major Compaction" for now.
+// Compact merges all SSTables into one using streaming.
 func (l *LSM) Compact() error {
-    l.mu.Lock()
-    defer l.mu.Unlock()
-    
-    // Basic check again under lock
-    if len(l.ssTables) <= 1 {
-        return nil
-    }
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
-    // 1. Scan all data from all SSTables
-    // We reuse RangeScan logic but for the entire range
-    // Since RangeScan uses LWW from l.ssTables, it correctly handles duplicates/deletes logic
-    // EXCEPT RangeScan (v1) filtered tombstones out. 
-    // For Compaction, we need to decide: do we keep tombstones?
-    // If we are strictly merging ALL tables including oldest, we can drop tombstones 
-    // because there is no older data to shadow. 
-    // So yes, scanning and filtering tombstones is correct for a "Full Compaction".
-    
-    // However, RangeScan returns sorted struct. We can iterate that.
-    
-    kvs, err := l.RangeScan("", "\xFF") // Scan everything
-    if err != nil {
-        return err
-    }
-    
-    // 2. Write to new SSTable
-    filename := fmt.Sprintf("%d.sst", time.Now().UnixNano())
-    path := filepath.Join(l.dataDir, filename)
-    
-    // Create temporary MemTable to reuse WriteSSTable? 
-    // No, MemTable might be too big for RAM if DB is huge.
-    // But our WriteSSTable takes *MemTable.
-    // Ideally we should have a `SSTableBuilder` that takes stream of keys.
-    // For V1, let's assume compaction result fits in RAM (simplicity trade-off).
-    // Or refactor WriteSSTable.
-    
-    // Let's refactor WriteSSTable slightly or just construct a MemTable.
-    // If we assume MemTableSizeLimit is small, then compacting huge data into one 
-    // MemTable to write it violates design.
-    // WE NEED STREMING WRITE.
-    
-    // Let's implement a simple streaming writer here inline for now.
-    
-    f, err := os.Create(path)
-    if err != nil {
-        return err
-    }
-    defer f.Close()
+	// Basic check again under lock
+	if len(l.ssTables) <= 1 {
+		return nil
+	}
 
-	var index []IndexEntry
-	offset := int64(0)
+	// 1. Create Iterators for all SSTables
+	var iterators []Iterator
+	for _, sst := range l.ssTables {
+		it, err := sst.NewIterator()
+		if err != nil {
+			return err
+		}
+		iterators = append(iterators, it)
+	}
 
-	for i, kv := range kvs {
-		if i%100 == 0 {
-			index = append(index, IndexEntry{Key: kv.Key, Offset: offset})
+	mergedIter := NewMergedIterator(iterators)
+
+	// 2. Stream to new SSTable
+	filename := fmt.Sprintf("%d.sst", time.Now().UnixNano())
+	path := filepath.Join(l.dataDir, filename)
+
+	builder, err := NewSSTableBuilder(path)
+	if err != nil {
+		return err
+	}
+	defer builder.file.Close() // Safety close
+
+	for mergedIter.Next() {
+		// Filter tombstones (nil value)
+		// For a full compaction (Major), we can discard tombstones if we are sure no older data exists.
+		// Since we merge ALL overlapping tables (level 0), and there is no Level 1+, 
+		// we are effectively doing a Full Compaction.
+		// So yes, drop tombstones.
+		if mergedIter.Value() == nil {
+			continue
 		}
 		
-		kLen := int32(len(kv.Key))
-		vLen := int32(len(kv.Value))
-
-		if err := binary.Write(f, binary.LittleEndian, kLen); err != nil { return err }
-		if _, err := f.WriteString(kv.Key); err != nil { return err }
-		if err := binary.Write(f, binary.LittleEndian, vLen); err != nil { return err }
-		if _, err := f.Write(kv.Value); err != nil { return err }
-
-		offset += 4 + int64(kLen) + 4 + int64(vLen)
+		if err := builder.Add(mergedIter.Key(), mergedIter.Value()); err != nil {
+			return err
+		}
 	}
-    
-    // Write Index
-    indexOffset := offset
-	for _, idx := range index {
-		kLen := int32(len(idx.Key))
-		if err := binary.Write(f, binary.LittleEndian, kLen); err != nil { return err }
-		if _, err := f.WriteString(idx.Key); err != nil { return err }
-		if err := binary.Write(f, binary.LittleEndian, idx.Offset); err != nil { return err }
-	}
-	if err := binary.Write(f, binary.LittleEndian, indexOffset); err != nil { return err }
 
-    // 3. Close new SSTable
-    f.Close() // Explicit close before reopen
-    
-    newTable, err := OpenSSTable(path)
-    if err != nil {
-        return err
-    }
-    
-    // 4. Update LSM state (Replace all old tables with new one)
-    oldTables := l.ssTables
-    l.ssTables = []*SSTable{newTable}
-    
-    // 5. Delete old files
-    // We need to be careful with file locks on Windows if readers are active.
-    // We are under mu.Lock() so no new method calls start, but ongoing reads?
-    // We used RLock for reads. So Lock() blocks until readers finish.
-    // This is safe.
-    
-    for _, t := range oldTables {
-        t.Close()
-        os.Remove(t.file.Name())
-    }
-    
-    return nil
+	if err := mergedIter.Error(); err != nil {
+		return err
+	}
+
+	if err := builder.Close(); err != nil {
+		return err
+	}
+
+	// 3. Open new SSTable
+	newTable, err := OpenSSTable(path)
+	if err != nil {
+		return err
+	}
+
+	// 4. Update LSM state
+	oldTables := l.ssTables
+	l.ssTables = []*SSTable{newTable}
+
+	// 5. Delete old files
+	for _, t := range oldTables {
+		t.Close()
+		os.Remove(t.file.Name())
+	}
+
+	return nil
 }
+
+// MergedIterator performs an N-way merge of iterators.
+type MergedIterator struct {
+	iters []Iterator
+	currK string
+	currV []byte
+	err   error
+}
+
+func NewMergedIterator(iters []Iterator) *MergedIterator {
+    // Prime all iterators
+    for _, it := range iters {
+        it.Next() 
+    }
+	return &MergedIterator{iters: iters}
+}
+
+func (m *MergedIterator) Next() bool {
+	// 1. Find the smallest key among all valid iterators
+	smallestKey := ""
+	first := true
+
+	// Check errors first
+	for _, it := range m.iters {
+		if it.Error() != nil {
+			m.err = it.Error()
+			return false
+		}
+	}
+
+	// Scan for min key
+	for _, it := range m.iters {
+		if !it.Valid() {
+			continue
+		}
+		if first || it.Key() < smallestKey {
+			smallestKey = it.Key()
+			first = false
+		}
+	}
+
+	if first {
+		// No valid iterators left
+		return false
+	}
+
+	m.currK = smallestKey
+	m.currV = nil
+	foundValue := false
+
+	// 2. Advance all iterators that have this key
+	// Since m.iters is ordered Newest -> Oldest, the first one we find 
+	// is the one we keep. We discard the rest (shadowed).
+	for _, it := range m.iters {
+		if it.Valid() && it.Key() == smallestKey {
+			if !foundValue {
+				m.currV = it.Value()
+				foundValue = true
+			}
+			// Build internal state for next call
+			it.Next()
+		}
+	}
+
+	return true
+}
+
+
+func (m *MergedIterator) Key() string   { return m.currK }
+func (m *MergedIterator) Value() []byte { return m.currV }
+func (m *MergedIterator) Error() error  { return m.err }
 
 // RangeScan returns values for keys in [start, end).
 func (l *LSM) RangeScan(start, end string) ([]struct {
