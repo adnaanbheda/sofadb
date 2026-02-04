@@ -6,7 +6,7 @@ We have implemented a functional Log-Structured Merge (LSM) Tree storage engine 
 ## Comparison Matrix
 
 | Feature | SofaDB (Current) | LevelDB / RocksDB (Production) | Gap Analysis |
-| :--- | :--- | :--- | :--- |
+| --- | --- | --- | --- |
 | **MemTable** | Skiplist (single) | Skiplist (Concurrent) | **Moderate**: Our single-threaded insert under lock is simple but limits write concurrency. |
 | **Persistence** | WAL (Basic) | WAL (Batch + Group Commit) | **Low**: Our WAL captures data. Missing checksums and batch optimizations. |
 | **SSTable Format** | KV + Sparse Index | KV + Index + Bloom Filter + Compression | **High**: Missing **Bloom Filters** means every missed read hits disk. Missing compression wastes space. |
@@ -19,24 +19,25 @@ We have implemented a functional Log-Structured Merge (LSM) Tree storage engine 
 **Status: Functional Prototype / "Toy" DB**
 
 The current implementation is **correct** in terms of data storage and retrieval semantics. It persists data and handles range scans. However, it is **not yet robust** enough for high-scale production usage due to:
-1.  **Performance Cliffs (Disk I/O)**: The "Merge All" strategy causes massive **Write Amplification**. Compacting 1GB of data requires reading and re-writing the entire 1GB, even if only 1KB changed. This saturates **Disk I/O** bandwidth, causing latency spikes for concurrent writes to the WAL. (Note: RAM is no longer a bottleneck due to Streaming Compaction).
-2.  **Read Amplification**: Without Bloom Filters, checking non-existent keys is slow.
-3.  **Concurrency Bottlenecks**: Global lock limits throughput on multi-core concurrent workloads.
+-  **Performance Cliffs (Disk I/O)**: The "Merge All" strategy causes massive **Write Amplification**. Compacting 1GB of data requires reading and re-writing the entire 1GB.
+-  **RAM Scalability (Sparse Index)**: While compaction is fixed, we load the **Entire Sparse Index** of every SSTable into RAM. For 100GB of data with 1KB keys, the index alone could consume ~1GB RAM. Production systems use Block Caches or on-disk indices (B-Trees/Hash) to avoid this.
+-  **Read Amplification**: Without Bloom Filters, checking non-existent keys is slow.
+-  **Concurrency Bottlenecks**: Global lock limits throughput on multi-core concurrent workloads.
 
 ## Roadmap to Production
 To reach "Production Grade", the following upgrades are prioritized:
 
-1.  **Implement Bloom Filters**: Drastically reduce disk seeks for `Get`.
-2.  **Leveled Compaction**: Switch from "Merge All" to LevelDB-style compaction (L0->L1->L2).
-3.  **MANIFEST File**: Track file metadata safely instead of relying on `*.sst` file listing.
-4.  **CRC32 Checksums**: Verify data integrity on read to detect disk corruption.
+-  **Implement Bloom Filters**: Drastically reduce disk seeks for `Get`.
+-  **Leveled Compaction**: Switch from "Merge All" to LevelDB-style compaction (L0->L1->L2).
+-  **MANIFEST File**: Track file metadata safely instead of relying on `*.sst` file listing.
+-  **CRC32 Checksums**: Verify data integrity on read to detect disk corruption.
 
 ## Comparison with MongoDB (WiredTiger)
 
 MongoDB's default storage engine, **WiredTiger**, is primarily a **B-Tree** engine (though it supports LSM, B-Tree is the default for general workloads).
 
 | Metric | SofaDB (LSM) | MongoDB (B-Tree) | Analysis |
-| :--- | :--- | :--- | :--- |
+| --- | --- | --- | --- |
 | **Write Amplification** | **Low** | **High** | LSM appends sequentially. B-Trees rewrite entire 4KB-16KB pages for small updates. |
 | **Read Amplification** | **High** (without optimizations) | **Low** | B-Trees have predictable O(log N) lookups. LSMs may need to check multiple files (L0...LN). |
 | **Space Amplification** | **Medium** | **Low** (via Fragmentation) | LSMs store stale data until compaction. B-Trees fragment but generally reclaim space faster on update-in-place. |
