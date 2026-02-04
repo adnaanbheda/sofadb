@@ -78,7 +78,7 @@ func runBenchmark(name string, op func(int) error) {
 func benchSofaDBHTTP() {
 	fmt.Println("--- SofaDB ---")
 	client := &http.Client{Timeout: 5 * time.Second}
-	url := "http://localhost:8081/docs"
+	url := "http://localhost:9090/docs"
 
 	// Write
 	runBenchmark("SofaDB Write", func(i int) error {
@@ -112,11 +112,9 @@ func benchSofaDBHTTP() {
 	})
 }
 
-}
-
 func benchSofaDBTCP() {
 	fmt.Println("--- SofaDB TCP ---")
-	addr := "localhost:8081"
+	addr := "localhost:9091"
 
 	// Simple connection pooling via channel
 	pool := make(chan net.Conn, *concurrency)

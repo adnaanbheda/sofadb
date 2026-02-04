@@ -20,8 +20,8 @@ var (
 
 func main() {
 	// Parse command line flags
-	port := flag.Int("port", 8080, "HTTP Port to listen on")
-	tcpPort := flag.Int("tcp-port", 8081, "TCP Port to listen on")
+	port := flag.Int("port", 9090, "HTTP Port to listen on")
+	tcpPort := flag.Int("tcp-port", 9091, "TCP Port to listen on")
 	dataDir := flag.String("data-dir", "./data", "Directory for data storage")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
