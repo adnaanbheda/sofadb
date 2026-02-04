@@ -185,7 +185,7 @@ func TestChaos_CompactionInterrupt(t *testing.T) {
 	// Step 3: Verify data integrity - check a sample of keys
 	for i := 0; i < 1000; i += 100 {
 		key := fmt.Sprintf("key-%d", i)
-		value, err := lsm.Get(key)
+		value, err := lsm.Read(key)
 		if err != nil {
 			t.Errorf("Key %s not found after compaction interrupt", key)
 			continue
@@ -236,7 +236,7 @@ func TestChaos_RapidRestart(t *testing.T) {
 
 	for i := 0; i < iterations; i++ {
 		key := fmt.Sprintf("restart-key-%d", i)
-		value, err := lsm.Get(key)
+		value, err := lsm.Read(key)
 		if err != nil {
 			t.Errorf("Key from iteration %d not found", i)
 			continue
