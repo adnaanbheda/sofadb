@@ -78,7 +78,7 @@ func runBenchmark(name string, op func(int) error) {
 func benchSofaDBHTTP() {
 	fmt.Println("--- SofaDB ---")
 	client := &http.Client{Timeout: 5 * time.Second}
-	url := "http://localhost:9090/docs"
+	url := "http://localhost:9696/docs"
 
 	// Write
 	runBenchmark("SofaDB Write", func(i int) error {

@@ -4,7 +4,7 @@ services:
   sofadb:
     build: .
     ports:
-      - "9090:9090" # HTTP
+      - "9696:9696" # HTTP (Host:Container)
       - "9091:9091" # TCP
     volumes:
       - sofadb_data:/data
