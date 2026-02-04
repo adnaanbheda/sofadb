@@ -30,3 +30,16 @@ To reach "Production Grade", the following upgrades are prioritized:
 2.  **Leveled Compaction**: Switch from "Merge All" to LevelDB-style compaction (L0->L1->L2).
 3.  **MANIFEST File**: Track file metadata safely instead of relying on `*.sst` file listing.
 4.  **CRC32 Checksums**: Verify data integrity on read to detect disk corruption.
+
+## Comparison with MongoDB (WiredTiger)
+
+MongoDB's default storage engine, **WiredTiger**, is primarily a **B-Tree** engine (though it supports LSM, B-Tree is the default for general workloads).
+
+| Metric | SofaDB (LSM) | MongoDB (B-Tree) | Analysis |
+| :--- | :--- | :--- | :--- |
+| **Write Amplification** | **Low** | **High** | LSM appends sequentially. B-Trees rewrite entire 4KB-16KB pages for small updates. |
+| **Read Amplification** | **High** (without optimizations) | **Low** | B-Trees have predictable O(log N) lookups. LSMs may need to check multiple files (L0...LN). |
+| **Space Amplification** | **Medium** | **Low** (via Fragmentation) | LSMs store stale data until compaction. B-Trees fragment but generally reclaim space faster on update-in-place. |
+| **Workload Fit** | **Write-Heavy** (Logs, Events, Time-Series) | **Read-Heavy / Balanced** | SofaDB excels at ingesting data fast. MongoDB excels at random reads and complex queries. |
+
+**Conclusion**: SofaDB chooses LSM to maximize **ingest speed** and simplicty. Implementing Bloom Filters is critical to bridging the read-performance gap with B-Tree systems like MongoDB.
