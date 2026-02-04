@@ -135,6 +135,58 @@ func (l *LSM) recoverFromWAL() error {
 	return nil
 }
 
+// BatchPut stores multiple key-value pairs atomically-ish (flushed to WAL together).
+func (l *LSM) BatchPut(keys []string, values [][]byte) error {
+	if len(keys) != len(values) {
+		return fmt.Errorf("keys and values length mismatch")
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// 1. Write all to WAL
+	if l.walFile != nil {
+		for i := 0; i < len(keys); i++ {
+			kLen := int32(len(keys[i]))
+			vLen := int32(-1)
+			if values[i] != nil {
+				vLen = int32(len(values[i]))
+			}
+
+			if err := binary.Write(l.walFile, binary.LittleEndian, kLen); err != nil {
+				return err
+			}
+			if err := binary.Write(l.walFile, binary.LittleEndian, vLen); err != nil {
+				return err
+			}
+			if _, err := l.walFile.WriteString(keys[i]); err != nil {
+				return err
+			}
+			if values[i] != nil {
+				if _, err := l.walFile.Write(values[i]); err != nil {
+					return err
+				}
+			}
+		}
+		// Sync once for the batch
+		if err := l.walFile.Sync(); err != nil {
+			return err
+		}
+	}
+
+	// 2. Write to MemTable
+	for i := 0; i < len(keys); i++ {
+		l.mem.Put(keys[i], values[i])
+	}
+
+	// 3. Check for flush
+	if l.mem.Size() > MemTableSizeLimit {
+		return l.rotateMemTable(false)
+	}
+
+	return nil
+}
+
 func (l *LSM) loadSSTables() error {
 	files, err := ioutil.ReadDir(l.dataDir)
 	if err != nil {
@@ -532,8 +584,8 @@ func (l *LSM) ReadKeyRange(start, end string) ([]struct {
 		// Filter tombstones
 		if merged.Value() != nil {
 			results = append(results, struct {
-			Key   string
-			Value []byte
+				Key   string
+				Value []byte
 			}{k, merged.Value()})
 		}
 	}
@@ -564,5 +616,34 @@ func (l *LSM) Close() error {
 	for _, sst := range l.ssTables {
 		sst.Close()
 	}
+	return nil
+}
+
+type memIterator struct {
+	entries []struct {
+		Key   string
+		Value []byte
+	}
+	pos int
+}
+
+func (m *memIterator) Next() bool {
+	m.pos++
+	return m.pos <= len(m.entries)
+}
+
+func (m *memIterator) Valid() bool {
+	return m.pos > 0 && m.pos <= len(m.entries)
+}
+
+func (m *memIterator) Key() string {
+	return m.entries[m.pos-1].Key
+}
+
+func (m *memIterator) Value() []byte {
+	return m.entries[m.pos-1].Value
+}
+
+func (m *memIterator) Error() error {
 	return nil
 }

@@ -6,14 +6,16 @@ import (
 	"io"
 	"log"
 	"net"
-	"time"
 	"sofadb/internal/engine"
+	"time"
 )
 
 const (
-	CmdPut    = 0x01
-	CmdGet    = 0x02
-	CmdDelete = 0x03
+	CmdPut          = 0x01
+	CmdRead         = 0x02
+	CmdDelete       = 0x03
+	CmdReadKeyRange = 0x04
+	CmdBatchPut     = 0x05
 
 	StatusOK       = 0x00
 	StatusErr      = 0x01
@@ -60,9 +62,9 @@ func (s *TCPServer) Start() error {
 func (s *TCPServer) handleConn(conn net.Conn) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
-	
+
 	// Reusable buffers per connection?
-	// For simplicity, allowed allocs for now. 
+	// For simplicity, allowed allocs for now.
 	// Optimization: Use buffer pool.
 
 	for {
@@ -111,17 +113,78 @@ func (s *TCPServer) handleConn(conn net.Conn) {
 			err := s.engine.Put(key, valBuf)
 			s.writeResponse(conn, err, nil)
 
-		case CmdGet:
-			val, err := s.engine.Get(key)
+		case CmdRead:
+			val, err := s.engine.Read(key)
 			s.writeResponse(conn, err, val)
 
 		case CmdDelete:
 			err := s.engine.Delete(key)
 			s.writeResponse(conn, err, nil)
 
+		case CmdReadKeyRange:
+			// Read EndKeyLen (2 bytes)
+			var endKLen int16
+			if err := binary.Read(reader, binary.LittleEndian, &endKLen); err != nil {
+				return
+			}
+			endKeyBuf := make([]byte, endKLen)
+			if _, err := io.ReadFull(reader, endKeyBuf); err != nil {
+				return
+			}
+			endKey := string(endKeyBuf)
+
+			results, err := s.engine.ReadKeyRange(key, endKey)
+			s.writeRangeResponse(conn, err, results)
+
+		case CmdBatchPut:
+			// "key" here is actually "count" of entries?
+			// No, let's redefine the protocol for BatchPut.
+			// Re-read kLen as batch count?
+			// Let's assume kLen was actually batch count for CmdBatchPut.
+			count := int(kLen)
+			keys := make([]string, count)
+			values := make([][]byte, count)
+
+			for i := 0; i < count; i++ {
+				var rKLen int16
+				binary.Read(reader, binary.LittleEndian, &rKLen)
+				rKeyBuf := make([]byte, rKLen)
+				io.ReadFull(reader, rKeyBuf)
+				keys[i] = string(rKeyBuf)
+
+				var rVLen int32
+				binary.Read(reader, binary.LittleEndian, &rVLen)
+				rValBuf := make([]byte, rVLen)
+				io.ReadFull(reader, rValBuf)
+				values[i] = rValBuf
+			}
+
+			err := s.engine.BatchPut(keys, values)
+			s.writeResponse(conn, err, nil)
+
 		default:
 			return // Protocol violation
 		}
+	}
+}
+
+func (s *TCPServer) writeRangeResponse(w io.Writer, err error, results []struct {
+	Key   string
+	Value []byte
+}) {
+	if err != nil {
+		w.Write([]byte{StatusErr})
+		binary.Write(w, binary.LittleEndian, int32(0))
+		return
+	}
+
+	w.Write([]byte{StatusOK})
+	binary.Write(w, binary.LittleEndian, int32(len(results)))
+	for _, res := range results {
+		binary.Write(w, binary.LittleEndian, int16(len(res.Key)))
+		w.Write([]byte(res.Key))
+		binary.Write(w, binary.LittleEndian, int32(len(res.Value)))
+		w.Write(res.Value)
 	}
 }
 

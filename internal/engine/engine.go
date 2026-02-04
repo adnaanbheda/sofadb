@@ -72,6 +72,18 @@ func (e *Engine) Delete(key string) error {
 	return e.lsm.Delete(key)
 }
 
+// BatchPut stores multiple documents atomically-ish.
+func (e *Engine) BatchPut(keys []string, values [][]byte) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.closed {
+		return ErrEngineShutdown
+	}
+
+	return e.lsm.BatchPut(keys, values)
+}
+
 // Keys returns all keys in the store.
 // This is optimized to not load values into memory.
 func (e *Engine) Keys() ([]string, error) {
