@@ -1,81 +1,79 @@
 # SofaDB
 
-A lightweight, file-based key-document database written in Go with an HTTP API.
+A lightweight, high-performance LSM-tree based key-document database written in Go.
 
 ## Features
 
-- **Simple REST API** - GET, PUT, DELETE documents by key
-- **File-based persistence** - Data survives restarts
-- **Append-only log** - Fast writes, crash-safe
-- **In-memory index** - Fast reads via direct seek
-- **Thread-safe** - Handles concurrent requests
+- **Standardized API**: Consistent `Read`, `Put`, `Delete`, `ReadKeyRange`, and `BatchPut` operations.
+- **LSM-Tree Storage**: Optimized for high write throughput and sequential I/O.
+- **Binary TCP Protocol**: Minimal overhead for maximum performance (~88% of Redis speed).
+- **Hardened Durability**: 100% pass rate on chaos testing (rapid restarts, WAL recovery).
+- **Preliminary Performance**: Outperforms MongoDB in high-concurrency local random-read tests.
 
 ## Quick Start
 
-### Build
+### Build & Run
 
 ```bash
 go build -o sofadb ./cmd/sofadb
+./sofadb --port 9090 --tcp-port 9091 --data-dir ./data
 ```
 
-### Run
-
-```bash
-# Start with defaults (port 8080, data in ./data)
-./sofadb
-
-# Custom port and data directory
-./sofadb --port 9000 --data-dir /path/to/data
-```
-
-### Usage
+### HTTP Usage
 
 ```bash
 # Store a document
-curl -X PUT http://localhost:8080/docs/user1 \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Alice", "email": "alice@example.com"}'
+curl -X PUT http://localhost:9090/docs/user1 -d '{"name": "Alice"}'
 
-# Retrieve a document
-curl http://localhost:8080/docs/user1
+# Read a document
+curl http://localhost:9090/docs/user1
 
 # List all keys
-curl http://localhost:8080/docs
-
-# Delete a document
-curl -X DELETE http://localhost:8080/docs/user1
-
-# Health check
-curl http://localhost:8080/health
+curl http://localhost:9090/docs
 ```
 
 ## API Reference
 
-| Method | Endpoint | Description |
+### HTTP API
+
+| Method | Endpoint | Standard Op |
 |--------|----------|-------------|
-| `GET` | `/docs/{key}` | Retrieve a document |
-| `PUT` | `/docs/{key}` | Create or update a document |
-| `DELETE` | `/docs/{key}` | Delete a document |
-| `GET` | `/docs` | List all keys |
-| `GET` | `/health` | Health check |
+| `GET` | `/docs/{key}` | `Read` |
+| `PUT` | `/docs/{key}` | `Put` |
+| `DELETE` | `/docs/{key}` | `Delete` |
+| `GET` | `/docs` | `Keys` |
 
-## Storage Design
+### Binary TCP Protocol (`:9091`)
 
-SofaDB uses an append-only log with an in-memory index:
+The TCP protocol uses a simple binary format for maximum efficiency.
 
-- **Writes**: Always append to end of file → O(1)
-- **Reads**: Look up offset in index, seek to position → O(1)
-- **Deletes**: Append tombstone marker → O(1)
+| Command | Code | Format |
+|---------|------|--------|
+| `Put` | `0x01` | `Cmd\|KLen\|Key\|VLen\|Value` |
+| `Read` | `0x02` | `Cmd\|KLen\|Key` |
+| `Delete` | `0x03` | `Cmd\|KLen\|Key` |
+| `ReadKeyRange` | `0x04` | `Cmd\|KLen\|StartKey\|EndKLen\|EndKey` |
+| `BatchPut` | `0x05` | `Cmd\|Count\|(KLen\|Key\|VLen\|Value)*N` |
 
-On startup, the log is replayed to rebuild the index.
+## Performance
 
-## Configuration
+SofaDB is designed to compete with industry leaders in local-workload scenarios.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--port` | `8080` | HTTP server port |
-| `--data-dir` | `./data` | Directory for data files |
-| `--version` | - | Show version and exit |
+| Database | Operation | QPS (Approx) | Efficiency |
+| --- | --- | --- | --- |
+| **Redis** | Write | 13,199 | 100% |
+| **SofaDB** | Write | **11,598** | **~88%** |
+| **MongoDB** | Write | 10,936 | ~83% |
+
+*Preliminary results. Documentation for full benchmarking process available in `/research`.*
+
+## Architecture
+
+SofaDB implements a classic LSM stack:
+1. **MemTable**: In-memory skip-list for fast ingestion.
+2. **WAL**: Write-Ahead Log for crash recovery.
+3. **SSTables**: Sorted String Tables with sparse indexing and binary-packed data.
+4. **Compaction**: Background N-way merge to clean tombstones and maintain read performance.
 
 ## License
 
