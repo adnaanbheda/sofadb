@@ -4,8 +4,8 @@ services:
   sofadb:
     build: .
     ports:
-      - "8080:8080" # HTTP
-      - "8081:8081" # TCP
+      - "9090:9090" # HTTP
+      - "9091:9091" # TCP
     volumes:
       - sofadb_data:/data
     restart: always
