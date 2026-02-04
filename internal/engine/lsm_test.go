@@ -176,3 +176,81 @@ func TestLSMRangeScan(t *testing.T) {
 		t.Errorf("Unexpected second result: %v", res[1])
 	}
 }
+
+func TestLexicographicalOrder(t *testing.T) {
+	dir := "test_data_lex"
+	defer os.RemoveAll(dir)
+
+	lsm, err := NewLSM(dir)
+	if err != nil {
+		t.Fatalf("NewLSM failed: %v", err)
+	}
+	defer lsm.Close()
+
+	// Keys: user1, user10, user2, user100
+	// Lexicographical: user1, user10, user100, user2
+	keys := []string{"user1", "user10", "user2", "user100"}
+	for _, k := range keys {
+		lsm.Put(k, []byte("val"))
+	}
+
+	// Range [user1, user2) -> Expected: user1, user10, user100
+	res, err := lsm.ReadKeyRange("user1", "user2")
+	if err != nil {
+		t.Fatalf("ReadKeyRange failed: %v", err)
+	}
+
+	// "user2" is excluded by the range end
+	expected := []string{"user1", "user10", "user100"}
+
+	if len(res) != len(expected) {
+		t.Errorf("Expected %d keys, got %d", len(expected), len(res))
+	}
+
+	for i, r := range res {
+		if i < len(expected) && r.Key != expected[i] {
+			t.Errorf("Index %d: expected %s, got %s", i, expected[i], r.Key)
+		}
+	}
+}
+
+func TestNumericRangeWithPadding(t *testing.T) {
+	dir := "test_data_pad"
+	defer os.RemoveAll(dir)
+
+	lsm, err := NewLSM(dir)
+	if err != nil {
+		t.Fatalf("NewLSM failed: %v", err)
+	}
+	defer lsm.Close()
+
+	// Insert user1..user100 with zero padding (user001..user100)
+	// This ensures correct sorting: user001 < user002 < ... < user010 < ... < user100
+	for i := 1; i <= 100; i++ {
+		key := fmt.Sprintf("user%03d", i)
+		lsm.Put(key, []byte("val"))
+	}
+
+	// Range [user001, user100] (inclusive-ish)
+	// We use "user101" as end to include "user100"
+	res, err := lsm.ReadKeyRange("user001", "user101")
+	if err != nil {
+		t.Fatalf("ReadKeyRange failed: %v", err)
+	}
+
+	// Now we should get exactly 100 keys
+	// user001, user002, ..., user099, user100
+	if len(res) != 100 {
+		t.Errorf("Expected 100 keys, got %d", len(res))
+	}
+
+	// Check first and last
+	if len(res) > 0 {
+		if res[0].Key != "user001" {
+			t.Errorf("Expected first key user001, got %s", res[0].Key)
+		}
+		if res[99].Key != "user100" {
+			t.Errorf("Expected last key user100, got %s", res[99].Key)
+		}
+	}
+}
