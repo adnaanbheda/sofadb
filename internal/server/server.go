@@ -27,6 +27,11 @@ type Config struct {
 	DataDir string // Directory for data storage
 }
 
+// Engine returns the underlying storage engine.
+func (s *Server) Engine() *engine.Engine {
+	return s.engine
+}
+
 // New creates a new Server with the given configuration.
 func New(cfg Config) (*Server, error) {
 	eng, err := engine.New(cfg.DataDir)

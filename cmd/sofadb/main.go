@@ -20,7 +20,8 @@ var (
 
 func main() {
 	// Parse command line flags
-	port := flag.Int("port", 8080, "Port to listen on")
+	port := flag.Int("port", 8080, "HTTP Port to listen on")
+	tcpPort := flag.Int("tcp-port", 8081, "TCP Port to listen on")
 	dataDir := flag.String("data-dir", "./data", "Directory for data storage")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
@@ -46,14 +47,22 @@ func main() {
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
 
-	// Start server in goroutine
+	// Start HTTP server in goroutine
 	go func() {
 		if err := srv.Start(); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}
 	}()
 
-	log.Printf("SofaDB v%s started on port %d", version, *port)
+	// Start TCP server
+	tcpSrv := server.NewTCPServer(fmt.Sprintf(":%d", *tcpPort), srv.Engine())
+	go func() {
+		if err := tcpSrv.Start(); err != nil {
+			log.Fatalf("TCP Server error: %v", err)
+		}
+	}()
+
+	log.Printf("SofaDB v%s started on HTTP port %d, TCP port %d", version, *port, *tcpPort)
 	log.Printf("Data directory: %s", *dataDir)
 
 	// Wait for shutdown signal

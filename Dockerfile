@@ -11,4 +11,5 @@ FROM alpine:latest
 WORKDIR /app
 COPY --from=builder /app/sofadb .
 EXPOSE 8080
+EXPOSE 8081
 CMD ["./sofadb", "-port", "8080", "-data-dir", "/data"]
