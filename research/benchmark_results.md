@@ -9,13 +9,15 @@
 ## Results
 
 | Database | Operation | Time (Total) | QPS (Approx) | Relative Perf |
-| :--- | :--- | :--- | :--- | :--- |
-| **Redis** | Write | 0.81s | **12,339** | 1.0x (Baseline) |
-| | Read | 0.68s | **14,767** | 1.0x (Baseline) |
-| **MongoDB** | Write | 0.86s | **11,592** | ~0.94x |
-| | Read | 15.26s | **655** | ~0.04x |
-| **SofaDB** | Write | 3.48s | **2,870** | ~0.23x |
-| | Read | 21.30s | **469** | ~0.03x |
+| --- | --- | --- | --- | --- |
+| **Redis** | Write | 0.80s | **12,557** | 1.0x (Baseline) |
+|  | Read | 0.80s | **12,511** | 1.0x (Baseline) |
+| **MongoDB** | Write | 0.93s | **10,806** | ~0.86x |
+|  | Read | 14.60s | **685** | ~0.05x |
+| **SofaDB (HTTP)** | Write | 3.48s | **2,870** | ~0.23x |
+|  | Read | 21.30s | **469** | ~0.03x |
+| **SofaDB (TCP)** | Write | 0.91s | **10,970** | **~0.87x** |
+|  | Read | 0.92s | **10,901** | **~0.87x** |
 
 ## Analysis
 
