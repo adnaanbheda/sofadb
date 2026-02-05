@@ -58,6 +58,13 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
+// Handler returns the HTTP handler for testing purposes.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	s.registerRoutes(mux)
+	return s.loggingMiddleware(mux)
+}
+
 // registerRoutes sets up the HTTP routes.
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", s.handleHealth)
