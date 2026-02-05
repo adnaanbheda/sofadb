@@ -9,22 +9,41 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"sofadb/internal/engine"
+	"sofadb/internal/raft"
 )
+
+// Op represents a state machine command.
+type Op struct {
+	Type      string   `json:"type"`
+	Key       string   `json:"key,omitempty"`
+	Value     []byte   `json:"value,omitempty"`
+	BatchKeys []string `json:"batch_keys,omitempty"`
+	BatchVals [][]byte `json:"batch_vals,omitempty"`
+}
 
 // Server represents the HTTP server for SofaDB.
 type Server struct {
 	engine     *engine.Engine
+	raft       *raft.Raft // Optional Raft instance
 	httpServer *http.Server
 	addr       string
+
+	mu       sync.Mutex
+	notifyCh map[int]chan struct{}
 }
 
 // Config holds the server configuration.
+
+// Config holds the server configuration.
 type Config struct {
-	Addr    string // Address to listen on (e.g., ":8080")
-	DataDir string // Directory for data storage
+	Addr    string   // Address to listen on (e.g., ":8080")
+	DataDir string   // Directory for data storage
+	RaftID  string   // Unique ID for this node (URL)
+	Peers   []string // List of peer URLs
 }
 
 // Engine returns the underlying storage engine.
@@ -40,8 +59,22 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		engine: eng,
-		addr:   cfg.Addr,
+		engine:   eng,
+		addr:     cfg.Addr,
+		notifyCh: make(map[int]chan struct{}),
+	}
+
+	// Initialize Raft if configured
+	if len(cfg.Peers) > 0 {
+		// Create persistence directory
+		raftDir := cfg.DataDir + "/raft" // Subdirectory for raft WAL
+		persister := raft.NewPersister(raftDir)
+
+		applyCh := make(chan raft.ApplyMsg)
+		s.raft = raft.New(cfg.RaftID, cfg.Peers, applyCh, persister)
+
+		// Start background applier (Integration step)
+		go s.runApplier(applyCh)
 	}
 
 	mux := http.NewServeMux()
@@ -58,6 +91,34 @@ func New(cfg Config) (*Server, error) {
 	return s, nil
 }
 
+func (s *Server) runApplier(applyCh chan raft.ApplyMsg) {
+	for msg := range applyCh {
+		if msg.CommandValid {
+			var op Op
+			if err := json.Unmarshal(msg.Command, &op); err != nil {
+				log.Printf("Failed to unmarshal command: %v", err)
+				continue
+			}
+
+			switch op.Type {
+			case "PUT":
+				s.engine.Put(op.Key, op.Value)
+			case "DELETE":
+				s.engine.Delete(op.Key)
+			case "BATCH":
+				s.engine.BatchPut(op.BatchKeys, op.BatchVals)
+			}
+
+			s.mu.Lock()
+			if ch, ok := s.notifyCh[msg.CommandIndex]; ok {
+				close(ch)
+				delete(s.notifyCh, msg.CommandIndex)
+			}
+			s.mu.Unlock()
+		}
+	}
+}
+
 // Handler returns the HTTP handler for testing purposes.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -72,6 +133,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/docs/", s.handleDoc)
 	mux.HandleFunc("/range", s.handleRange)
 	mux.HandleFunc("/batch", s.handleBatch)
+
+	// Raft routes
+	mux.HandleFunc("/raft/request_vote", s.handleRequestVote)
+	mux.HandleFunc("/raft/append_entries", s.handleAppendEntries)
 }
 
 // loggingMiddleware logs incoming requests.
@@ -221,13 +286,37 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, key string) {
 		return
 	}
 
-	if err := s.engine.Put(key, body); err != nil {
-		if err == engine.ErrKeyTooLong {
-			http.Error(w, "Key too long (max 256 bytes)", http.StatusBadRequest)
+	if s.raft != nil {
+		op := Op{Type: "PUT", Key: key, Value: body}
+		cmd, _ := json.Marshal(op)
+		index, _, isLeader := s.raft.Propose(cmd)
+		if !isLeader {
+			http.Error(w, "Not Leader", http.StatusTemporaryRedirect) // 307
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+
+		// Wait for apply
+		s.mu.Lock()
+		ch := make(chan struct{})
+		s.notifyCh[index] = ch
+		s.mu.Unlock()
+
+		select {
+		case <-ch:
+			// Applied
+		case <-time.After(5 * time.Second):
+			http.Error(w, "Timeout waiting for consensus", http.StatusGatewayTimeout)
+			return
+		}
+	} else {
+		if err := s.engine.Put(key, body); err != nil {
+			if err == engine.ErrKeyTooLong {
+				http.Error(w, "Key too long (max 256 bytes)", http.StatusBadRequest)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -240,13 +329,35 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, key string) {
 
 // handleDelete removes a document by key.
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, key string) {
-	if err := s.engine.Delete(key); err != nil {
-		if err == engine.ErrKeyNotFound {
-			http.Error(w, "Document not found", http.StatusNotFound)
+	if s.raft != nil {
+		op := Op{Type: "DELETE", Key: key}
+		cmd, _ := json.Marshal(op)
+		index, _, isLeader := s.raft.Propose(cmd)
+		if !isLeader {
+			http.Error(w, "Not Leader", http.StatusTemporaryRedirect)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+
+		s.mu.Lock()
+		ch := make(chan struct{})
+		s.notifyCh[index] = ch
+		s.mu.Unlock()
+
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			http.Error(w, "Timeout", http.StatusGatewayTimeout)
+			return
+		}
+	} else {
+		if err := s.engine.Delete(key); err != nil {
+			if err == engine.ErrKeyNotFound {
+				http.Error(w, "Document not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -363,9 +474,31 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 		values[i] = valBytes
 	}
 
-	if err := s.engine.BatchPut(keys, values); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if s.raft != nil {
+		op := Op{Type: "BATCH", BatchKeys: keys, BatchVals: values}
+		cmd, _ := json.Marshal(op)
+		index, _, isLeader := s.raft.Propose(cmd)
+		if !isLeader {
+			http.Error(w, "Not Leader", http.StatusTemporaryRedirect)
+			return
+		}
+
+		s.mu.Lock()
+		ch := make(chan struct{})
+		s.notifyCh[index] = ch
+		s.mu.Unlock()
+
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			http.Error(w, "Timeout", http.StatusGatewayTimeout)
+			return
+		}
+	} else {
+		if err := s.engine.BatchPut(keys, values); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -374,4 +507,44 @@ func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
 		"status": "created",
 		"count":  len(keys),
 	})
+}
+
+// handleRequestVote handles Raft RequestVote RPCs.
+func (s *Server) handleRequestVote(w http.ResponseWriter, r *http.Request) {
+	if s.raft == nil {
+		http.Error(w, "Raft not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	var args raft.RequestVoteArgs
+	if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	var reply raft.RequestVoteReply
+	s.raft.RequestVote(&args, &reply)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(reply)
+}
+
+// handleAppendEntries handles Raft AppendEntries RPCs.
+func (s *Server) handleAppendEntries(w http.ResponseWriter, r *http.Request) {
+	if s.raft == nil {
+		http.Error(w, "Raft not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	var args raft.AppendEntriesArgs
+	if err := json.NewDecoder(r.Body).Decode(&args); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	var reply raft.AppendEntriesReply
+	s.raft.AppendEntries(&args, &reply)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(reply)
 }

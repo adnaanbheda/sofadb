@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,6 +24,8 @@ func main() {
 	port := flag.Int("port", 9090, "HTTP Port to listen on")
 	tcpPort := flag.Int("tcp-port", 9091, "TCP Port to listen on")
 	dataDir := flag.String("data-dir", "./data", "Directory for data storage")
+	raftID := flag.String("raft-id", "", "Unique ID for this node (URL, e.g., http://localhost:9090)")
+	peers := flag.String("peers", "", "Comma-separated list of peer URLs (e.g., http://localhost:9090,http://localhost:9091)")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
 
@@ -32,9 +35,16 @@ func main() {
 	}
 
 	// Create server configuration
+	var peerList []string
+	if *peers != "" {
+		peerList = strings.Split(*peers, ",")
+	}
+
 	cfg := server.Config{
 		Addr:    fmt.Sprintf(":%d", *port),
 		DataDir: *dataDir,
+		RaftID:  *raftID,
+		Peers:   peerList,
 	}
 
 	// Create and start server
