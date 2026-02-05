@@ -107,24 +107,58 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDocs handles requests to /docs (list all keys).
+// handleDocs streams all documents as a JSON array.
 func (s *Server) handleDocs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	keys, err := s.engine.Keys()
+	w.Header().Set("Content-Type", "application/json")
+
+	// Start JSON array
+	w.Write([]byte("["))
+
+	first := true
+	enc := json.NewEncoder(w)
+
+	err := s.engine.Scan(func(key string, value []byte) bool {
+		if !first {
+			w.Write([]byte(","))
+		}
+		first = false
+
+		// Check if value is valid JSON
+		var jsonVal interface{}
+		if json.Valid(value) {
+			jsonVal = json.RawMessage(value)
+		} else {
+			jsonVal = string(value)
+		}
+
+		doc := struct {
+			Key   string      `json:"key"`
+			Value interface{} `json:"value"`
+		}{
+			Key:   key,
+			Value: jsonVal,
+		}
+
+		if encodeErr := enc.Encode(doc); encodeErr != nil {
+			log.Printf("Error encoding doc: %v", encodeErr)
+			return false // Stop iteration
+		}
+		return true // Continue iteration
+	})
+
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		// Note: If we already wrote part of the response, we can't change the status code now.
+		// We just log it. In a robust system, we might use trailers or a chunked stream error convention.
+		log.Printf("Scan error: %v", err)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"keys":  keys,
-		"count": len(keys),
-	})
+	// End JSON array
+	w.Write([]byte("]"))
 }
 
 // handleDoc handles requests to /docs/{key}.
@@ -241,14 +275,21 @@ func (s *Server) handleRange(w http.ResponseWriter, r *http.Request) {
 
 	// Transform for JSON
 	type rangePair struct {
-		Key   string `json:"key"`
-		Value string `json:"value"` // Assuming string values for JSON simplicity, or use []byte/base64
+		Key   string      `json:"key"`
+		Value interface{} `json:"value"`
 	}
 	var jsonResults []rangePair
 	for _, res := range results {
+		var val interface{}
+		if json.Valid(res.Value) {
+			val = json.RawMessage(res.Value)
+		} else {
+			val = string(res.Value)
+		}
+
 		jsonResults = append(jsonResults, rangePair{
 			Key:   res.Key,
-			Value: string(res.Value),
+			Value: val,
 		})
 	}
 

@@ -30,6 +30,9 @@ curl http://localhost:9090/docs/user1
 
 # List all keys
 curl http://localhost:9090/docs
+
+# Range Scan
+curl "http://localhost:9090/range?start=user1&end=user5"
 ```
 
 ## API Reference
@@ -42,6 +45,7 @@ curl http://localhost:9090/docs
 | `PUT` | `/docs/{key}` | `Put` |
 | `DELETE` | `/docs/{key}` | `Delete` |
 | `GET` | `/docs` | `Keys` |
+| `GET` | `/range?start=a&end=z` | `ReadKeyRange` |
 
 ### Binary TCP Protocol (`:9091`)
 

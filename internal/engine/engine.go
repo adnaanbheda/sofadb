@@ -112,6 +112,19 @@ func (e *Engine) ReadKeyRange(start, end string) ([]struct {
 	return e.lsm.ReadKeyRange(start, end)
 }
 
+// Scan iterates over all key-value pairs and calls the callback for each.
+// It stops if the callback returns false.
+func (e *Engine) Scan(fn func(key string, value []byte) bool) error {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.closed {
+		return ErrEngineShutdown
+	}
+
+	return e.lsm.Scan(fn)
+}
+
 // Count returns the number of documents in the store.
 func (e *Engine) Count() int {
 	keys, _ := e.Keys()

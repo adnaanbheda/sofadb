@@ -593,6 +593,48 @@ func (l *LSM) ReadKeyRange(start, end string) ([]struct {
 	return results, nil
 }
 
+// Scan iterates over all keys and calls fn for each key-value pair.
+// Returns error if iterator fails. Stops if fn returns false.
+func (l *LSM) Scan(fn func(key string, value []byte) bool) error {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	// 1. Get all iterators
+	var iterators []Iterator
+
+	// Active MemTable
+	memEntries, _ := l.mem.All()
+	iterators = append(iterators, &memIterator{entries: memEntries})
+
+	// Immutable MemTables
+	for i := len(l.immutable) - 1; i >= 0; i-- {
+		entries, _ := l.immutable[i].All()
+		iterators = append(iterators, &memIterator{entries: entries})
+	}
+
+	// SSTables
+	for _, sst := range l.ssTables {
+		it, err := sst.NewIterator()
+		if err != nil {
+			return err
+		}
+		iterators = append(iterators, it)
+	}
+
+	merged := NewMergedIterator(iterators)
+
+	for merged.Next() {
+		// Filter tombstones
+		if merged.Value() != nil {
+			if !fn(merged.Key(), merged.Value()) {
+				break
+			}
+		}
+	}
+
+	return merged.Error()
+}
+
 func (l *LSM) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
