@@ -64,6 +64,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/docs", s.handleDocs)
 	mux.HandleFunc("/docs/", s.handleDoc)
 	mux.HandleFunc("/range", s.handleRange)
+	mux.HandleFunc("/batch", s.handleBatch)
 }
 
 // loggingMiddleware logs incoming requests.
@@ -297,5 +298,73 @@ func (s *Server) handleRange(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"results": jsonResults,
 		"count":   len(jsonResults),
+	})
+}
+
+// handleBatch handles requests to POST /batch.
+// Body: {"docs": [{"key": "k1", "value": "v1"}, ...]}
+func (s *Server) handleBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Docs []struct {
+			Key   string      `json:"key"`
+			Value interface{} `json:"value"`
+		} `json:"docs"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Docs) == 0 {
+		http.Error(w, "No documents provided", http.StatusBadRequest)
+		return
+	}
+
+	// Prepare data for Engine.BatchPut
+	keys := make([]string, len(req.Docs))
+	values := make([][]byte, len(req.Docs))
+
+	for i, doc := range req.Docs {
+		if doc.Key == "" {
+			http.Error(w, fmt.Sprintf("Key required at index %d", i), http.StatusBadRequest)
+			return
+		}
+		keys[i] = doc.Key
+
+		// Handle value conversion similar to Put
+		var valBytes []byte
+		switch v := doc.Value.(type) {
+		case string:
+			valBytes = []byte(v)
+		case nil:
+			valBytes = []byte("")
+		default:
+			// If it's a JSON object/array, marshal it back to bytes
+			b, err := json.Marshal(v)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Invalid value at index %d: %v", i, err), http.StatusBadRequest)
+				return
+			}
+			valBytes = b
+		}
+		values[i] = valBytes
+	}
+
+	if err := s.engine.BatchPut(keys, values); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "created",
+		"count":  len(keys),
 	})
 }

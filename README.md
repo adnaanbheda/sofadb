@@ -46,6 +46,14 @@ curl "http://localhost:9090/range?start=user1&end=user5"
 | `DELETE` | `/docs/{key}` | `Delete` |
 | `GET` | `/docs` | `Keys` |
 | `GET` | `/range?start=a&end=z` | `ReadKeyRange` |
+| `POST`| `/batch` | `BatchPut` |
+
+### Batch Usage
+
+```bash
+curl -X POST http://localhost:9090/batch \
+  -d '{"docs": [{"key":"k1", "value":"v1"}, {"key":"k2", "value":{"json":true}}]}'
+```
 
 ### Binary TCP Protocol (`:9091`)
 
