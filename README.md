@@ -19,6 +19,37 @@ go build -o sofadb ./cmd/sofadb
 ./sofadb --port 9090 --tcp-port 9091 --data-dir ./data
 ```
 
+### Docker
+
+**Development (Build from Source):**
+```bash
+docker-compose up --build
+```
+
+**Release (Pre-built Image):**
+```bash
+docker-compose -f docker-compose.release.yml up
+```
+
+Or you can use this `docker-compose.yml` directly:
+
+```yaml
+version: '3.8'
+
+services:
+  sofadb:
+    image: ghcr.io/adnaanbheda/sofadb:main
+    ports:
+      - "9696:9696" # HTTP (Host:Container)
+      - "9091:9091" # TCP
+    volumes:
+      - sofadb_data:/data
+    restart: always
+
+volumes:
+  sofadb_data:
+```
+
 ### HTTP Usage
 
 ```bash
